@@ -26,9 +26,9 @@ jobs:
       - name: 'Az CLI login'
         uses: azure/login@v1
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID_PAYG }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID_PAYG }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_PAYG }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
 
       - name: Checkout Repository
