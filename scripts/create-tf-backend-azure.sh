@@ -1,143 +1,89 @@
-name: 'Azure Foundation CI Workflow'
+#!/usr/bin/env bash
 
-permissions:
-  id-token: write
-  contents: read
+set -euo pipefail
 
-on:
-  push:
-    branches:
-      - 'feature/**' # Double asterisks (**) to match any number of characters
+REPO_ID=${REPO_ID:-"12345"}
+RESOURCE_GROUP_NAME=${RESOURCE_GROUP_NAME:-"rg-github-terraform-$REPO_ID"}
+RESOURCE_GROUP_LOCATION=${RESOURCE_GROUP_LOCATION:-"brazilsouth"}
+STORAGE_ACCOUNT_NAME=${STORAGE_ACCOUNT_NAME:-"stgithubtf$REPO_ID"}
+STORAGE_ACCOUNT_SKU=${STORAGE_ACCOUNT_SKU:-"Standard_LRS"}
+CONTAINER_NAME=${CONTAINER_NAME:-"tfstate"}
 
+# Register GITHUB OUTPUTS
 
-env:
-  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-  ARM_USE_OIDC: true
-  ARM_SKIP_PROVIDER_REGISTRATION: true
+echo "STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME" >> $GITHUB_OUTPUT
+echo "CONTAINER_NAME=$CONTAINER_NAME" >> $GITHUB_OUTPUT
+echo "RESOURCE_GROUP_NAME=$RESOURCE_GROUP_NAME" >> $GITHUB_OUTPUT
 
+# Register GITHUB_ENV
 
-
-jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 'Az CLI login'
-        uses: azure/login@v1
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+echo "STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME" >> $GITHUB_ENV
+echo "CONTAINER_NAME=$CONTAINER_NAME" >> $GITHUB_ENV
+echo "RESOURCE_GROUP_NAME=$RESOURCE_GROUP_NAME" >> $GITHUB_ENV
 
 
-      - name: Checkout Repository
-        uses: actions/checkout@v2
+# Check if Blob Container exists
+# ACCOUNT_KEY=$(az storage account keys list --resource-group $RESOURCE_GROUP_NAME --account-name $STORAGE_ACCOUNT_NAME --query '[0].value' -o tsv || echo )
+# if [[ ! -z "$ACCOUNT_KEY" ]]; then
+#   echo "Found Account key for $RESOURCE_GROUP_NAME -- $STORAGE_ACCOUNT_NAME"
 
-      # Install the latest version of the Terraform CLI
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: "1.3.1"
+#   count=$(az storage container list \
+#     --account-name $STORAGE_ACCOUNT_NAME \
+#     --account-key $ACCOUNT_KEY \
+#     --query '[*].name' \
+#     -o tsv | grep $CONTAINER_NAME -c)
 
-      - name: Setup Terragrunt
-        run: |
-          sudo wget -q -O /bin/terragrunt "https://github.com/gruntwork-io/terragrunt/releases/download/v0.34.1/terragrunt_linux_amd64"
-          sudo chmod +x /bin/terragrunt
-          terragrunt --version
-          terraform --version
-  
-      - name: 'Init Terraform Backend'
-        id: init-terraform-backend
-        shell: bash
-        run: |
-          pushd ../scripts
-            # Get Repository ID
-            export REPO_ID=$(curl -s -H "Authorization:token ${{ secrets.GIT_TOKEN }}" \
-              https://api.github.com/repos/${{ github.repository }} | jq '.id')
-  
-            # Create tf backend if not exists
-            chmod +x create-tf-backend-azure.sh
-            ./create-tf-backend-azure.sh
-          popd
-        working-directory: ${{ github.workspace }}/infra  
+#   if [[ $count -gt 0 ]]; then
+#     echo "Container Blob $CONTAINER_NAME Found, aborting Terraform Backend Setup"
+#     exit 0
+#   fi
 
-      - name: Terragrunt Validate
-        run: |
-          terragrunt run-all validate \
-           --terragrunt-working-dir $PWD/env/dev/ \
-           --terragrunt-include-external-dependencies \
-           --terragrunt-non-interactive
-        working-directory: ${{ github.workspace }}/infra  
+# else
+#   echo "Account Key not found for $RESOURCE_GROUP_NAME -- $STORAGE_ACCOUNT_NAME"
+# fi
 
+# echo "Creating Resource Group, Storage Account and Container Blob..."
 
-  
-      # Generates an execution plan for Terraform
-      # An exit code of 0 indicated no changes, 1 a terraform failure, 2 there are pending changes.
-      - name: Terragrunt Plan
-        id: tf-plan
-        run: |
-          export exitcode=0
-          terragrunt run-all plan \
-          --terragrunt-working-dir $PWD/env/${{ inputs.environment }} \
-          -detailed-exitcode \
-          -no-color \
-          -out tfplan || export exitcode=$?
-          echo "exitcode=$exitcode" >> $GITHUB_OUTPUT
-  
-          find ./env -type f
-          bk=$(find ./env -type f -name '*backend.tf')
-          cat $bk
-          
-          if [ $exitcode -eq 1 ]; then
-            echo Terragrunt Plan Failed!
-            exit 1
-          else 
-            exit 0
-          fi
-        working-directory: ${{ github.workspace }}/infra
+# Create Resource Group
+az group create \
+  --name $RESOURCE_GROUP_NAME \
+  --location $RESOURCE_GROUP_LOCATION
 
+# Create Storage Account
+az storage account create \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $STORAGE_ACCOUNT_NAME \
+  --location $RESOURCE_GROUP_LOCATION\
+  --sku $STORAGE_ACCOUNT_SKU \
+  --kind StorageV2 \
+  --encryption-services blob \
+  --https-only false \
+  --allow-blob-public-access true
 
-      - name: Terragrunt Apply
-        id: tf-apply
-        run: |
-         echo "yes" | terragrunt run-all apply \
-         --terragrunt-working-dir $PWD/env/${{ inputs.environment }} \
-         -auto-approve \
-         -input=false \
-         -no-color \
-         tfplan
-        working-directory: ${{ github.workspace }}/infra
+# Adjust Storage Account public network access
+#az storage account network-rule add \
+#    -g $RESOURCE_GROUP_NAME \
+#    --account-name $STORAGE_ACCOUNT_NAME \
+#    --ip-address $STORAGE_ACCOUNT_NETWORK_IPS
 
-      #- name: Install Terrascan
-      #  run: |
-      #    wget https://github.com/tenable/terrascan/releases/download/v1.18.1/terrascan_1.18.1_Linux_x86_64.tar.gz
-      #    tar xvzf terrascan_1.18.1_Linux_x86_64.tar.gz
-      #    sudo mv terrascan /usr/local/bin/
+# Get Storage Account key
+ACCOUNT_KEY=$(az storage account keys list --resource-group $RESOURCE_GROUP_NAME --account-name $STORAGE_ACCOUNT_NAME --query [0].value -o tsv)
 
-      #- name: Run Terrascan
-      #  run: |
-      #   terrascan scan -i terraform -d ./ ts:minseverity=High
-      #  env:
-      #   TS_ALLOW_DOWNLOADS: "true"
-  
-      #- name: Install Terraform Linter
-      #  run: |
-      #   curl -sL https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
-      #  shell: bash
-   #
-      #   
-      #- name: Run Terraform Linter
-      #  run: |
-      #   tflint
-      #  env:
-      #    TF_VERSION: "1.3.1"
-        
-         
-      # Save plan to artifacts  
-      - name: Publish Terraform Plan
-        uses: actions/upload-artifact@v3
-        with:
-          name: tfplan
-          path: tfplan
-  
+# workaround network-rule add
+# sleep 30
+
+# Create Blob Container
+az storage container create \
+  --name $CONTAINER_NAME \
+  --account-name $STORAGE_ACCOUNT_NAME \
+  --account-key $ACCOUNT_KEY
+
+# Enable storage versioning
+az storage account blob-service-properties update \
+    --account-name $STORAGE_ACCOUNT_NAME \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --enable-versioning true
+
+# Register output to stdout
+echo "storage_account_name: $STORAGE_ACCOUNT_NAME"
+echo "container_name: $CONTAINER_NAME"
