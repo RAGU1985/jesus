@@ -12,7 +12,7 @@ resource "azurerm_subnet" "snet" {
   private_link_service_network_policies_enabled = coalesce(lookup(each.value, "private_endpoint_network_policies_enabled"), false)
   resource_group_name                           = each.value["resource_group_name"]
   service_endpoints                             = lookup(each.value, "service_endpoints", null)
-  virtual_network_name                          = data.azurerm_virtual_network.vnet["vnet"].id
+  virtual_network_name                          = "/subscriptions/d7caf0f4-7c69-4c4a-af92-3b52493f74ca/resourceGroups/rg-aks-brazilsouth-dev-001/providers/Microsoft.Network/virtualNetworks/vnet-itaudev-sbx-test-networking-001"
 
   dynamic "delegation" {
     for_each = coalesce(lookup(each.value, "delegation"), [])
