@@ -1,0 +1,17 @@
+name: Foundation Subscription production branch workflow
+
+on:
+  pull_request:
+    types:
+    - edited
+    branches:
+    - 'main'
+
+jobs:
+
+  terraform-cd:
+    uses: ./.github/workflows/cd.yml
+    with:
+      environment: prod
+      iupipes-config-path: '.iupipes.yml'
+    secrets: inherit

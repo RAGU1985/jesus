@@ -1,0 +1,40 @@
+name: Foundation Subscription develop branch workflow
+
+on:
+  push:
+    branches:
+    - 'develop'
+  pull_request:
+    branches:
+    - 'develop'
+
+jobs:
+
+  terraform-cd:
+    uses: ./.github/workflows/cd.yml
+    with:
+      environment: dev
+      iupipes-config-path: '.iupipes.yml'
+    secrets: inherit
+
+  bump_version:
+    needs:
+      - terraform-cd
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    uses: itau-corp/itau-up2-reusable-workflows-common-auto-tag/.github/workflows/create.yml@v1
+    with:
+      bump-version-dry-run: true
+      environment: dev
+    secrets: inherit
+
+  open-pr-to-release-candidate:
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    needs:
+      - bump_version
+    uses: itau-corp/itau-up2-reusable-workflows-common-pull-request/.github/workflows/create.yml@v2
+    with:
+      origin-branch: 'develop'
+      target-create-branch: true
+      target-base-branch: 'main'
+      target-branch: 'release/${{ needs.bump_version.outputs.new-tag }}'
+    secrets: inherit

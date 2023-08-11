@@ -1,0 +1,39 @@
+locals {
+  # group_object_id could be identified by running the following cmd
+  # az ad group show --group AD_GROUP_NAME -o json --query '.id'
+  group_object_id = "a7268a7c-ce0a-4c29-8512-d65d0291e8bc"
+  subscription = {
+    name                = "itau-connectivity-core-001"
+    alias               = "itau-connectivity-core-001"
+    workload            = "Production"
+    management_group_id = "mg-itau-connectivity"
+    tags = {
+      ApplicationName       = "Itau Connectivity Transit Resources"        #mandatory
+      ApproverName          = "Daniel Matos Lima"                          #mandatory
+      CostCenter            = "341-43082"                                  #mandatory
+      CreatedWith           = "DevOps"                                     #mandatory
+      Environment           = "prod"                                       #mandatory
+      OwnerName             = "daniel.matos-lima@itau-unibanco.com.br"     #mandatory
+      RequesterName         = "Daniel Matos Lima"                          #mandatory
+      StartDateOfTheProject = "26/07/2023"                                 #mandatory
+      NotificationEmail     = "daniel.matos-lima@itau-unibanco.com.br"     #mandatory
+      ProductOwnerEmail     = "juliano.affonso@itau-unibanco.com.br"       #mandatory
+      Sigla                 = "JB7"                                        #mandatory
+      Person                = "Daniel Matos Lima"                          #mandatory
+    }
+  }
+}
+
+include {
+  path = find_in_parent_folders()
+}
+
+terraform {
+  source = "${get_parent_terragrunt_dir()}/modules//subscription"
+}
+
+inputs = {
+  subscription = local.subscription
+  add_group_object_id = true
+  group_object_id = local.group_object_id
+}

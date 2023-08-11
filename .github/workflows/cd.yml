@@ -1,0 +1,593 @@
+name: 'Azure Foundation CD Workflow'
+
+permissions:
+  id-token: write
+  contents: write
+  issues: write
+  pull-requests: write
+  checks: write
+  actions: write
+  packages: read
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        required: false
+        type: string
+        default: github-ubuntu-2cores
+      iupipes-config-path:
+        required: false
+        type: string
+        default: '.iupipes.yml'
+      infra-working-directory:
+        required: false
+        type: string
+        default: 'infra'
+      infra-terraform-version:
+        required: false
+        type: string
+        default: '1.1.9'
+      infra-terragrunt-version:
+        required: false
+        type: string
+        default: 'v0.45.16'
+      environment:
+        required: true
+        type: string
+
+    secrets:
+      args:
+        required: false
+      AZURE_CLIENT_ID_DEV:
+        required: true
+      AZURE_SUBSCRIPTION_ID_DEV:
+        required: true
+      AZURE_CLIENT_ID_PROD:
+        required: true
+      AZURE_SUBSCRIPTION_ID_PROD:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      APPLICATION_ID:
+        required: false
+      APP_PRIVATE_KEY:
+        required: false
+      APP_PRIVATE_KEY_BH_TERRAFORM_1:
+        required: false
+      APP_PRIVATE_KEY_BH_TERRAFORM_2:
+        required: false
+      APU:
+        required: false
+      ADU:
+        required: false
+      ADPEP:
+        required: false
+
+env:
+  #ARM_CLIENT_ID: "${{ secrets.AZURE_CLIENT_ID }}"
+  #ARM_SUBSCRIPTION_ID: "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+  ARM_TENANT_ID: "${{ secrets.AZURE_TENANT_ID }}"
+  ARM_USE_OIDC: true
+
+
+jobs:
+
+  config-parse:
+    name: Parser config file
+    runs-on: ${{ inputs.runs-on }}
+    outputs:
+      infra-working-directory: ${{ steps.action-parse.outputs.infra-working-directory }}
+      infra-terraform-version: ${{ steps.action-parse.outputs.infra-terraform-version }}
+      infra-terragrunt-version: ${{ steps.action-parse.outputs.infra-terragrunt-version }}
+    steps:
+      - name: Get Token
+        id: get_workflow_token
+        uses: peter-murray/workflow-application-token-action@v1
+        with:
+          application_id: ${{ secrets.APPLICATION_ID }}
+          application_private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Checkout GitHub Action
+        uses: actions/checkout@v2
+        with:
+          repository: itau-corp/itau-up2-action-config-parse
+          ref: 'refs/heads/v1'
+          path: .github/actions/itau-up2-action-config-parse
+          token: ${{ steps.get_workflow_token.outputs.token }}
+
+      - name: Config parser
+        id: action-parse
+        uses: ./.github/actions/itau-up2-action-config-parse
+        with:
+          configPath: ${{ inputs.iupipes-config-path }}
+          reusableInputs: '${{ toJSON(inputs) }}'
+
+      - name: Setting Deploy
+        id: setting
+        env:
+          environment: ${{ inputs.environment }}
+        run: |
+          if [ $environment == 'dev' ]; then
+            echo "branch=true" >> $GITHUB_OUTPUT
+          elif [ $environment == 'hom' ]; then
+            echo "branch=true" >> $GITHUB_OUTPUT
+          elif [ $environment == 'ci-prod' ]; then
+            echo "branch=true" >> $GITHUB_OUTPUT
+          else
+            echo Ambiente Produtivo
+          fi
+
+  # BEGIN: Itau's Change management process
+  cria-mudanca:
+    runs-on: ${{ vars.RUNNER_K8S_SPOT_LOW }}
+    if: (inputs.environment == 'prod' || inputs.environment == 'hotfix' ) 
+    outputs:
+      success: ${{ steps.executed.outputs.flag }}
+      agendamento: ${{ steps.cria_gmud.outputs.ENVIRONMENT }}
+
+    steps:
+      - name: Evaluate secrets
+        id: evaluate_secrets
+        run: |
+          if [[ '${{ secrets.APP_PRIVATE_KEY_BH_TERRAFORM_1 }}' != '' || '${{ secrets.APP_PRIVATE_KEY_BH_TERRAFORM_2 }}' != '' || '${{ secrets.APP_PRIVATE_KEY_BH_3 }}' != '' ]]; then
+            RESULT=$(( ($GITHUB_RUN_NUMBER % 2) ))
+            echo $RESULT
+            if [[ $RESULT -eq 0 && '${{ vars.APPLICATION_ID_BH_TERRAFORM_1 }}' != '' ]]; then
+              echo "Exportando APPLICATION_ID_BH_TERRAFORM_1"
+              echo "APPLICATION_ID_BH=${{ vars.APPLICATION_ID_BH_TERRAFORM_1 }}" >> $GITHUB_OUTPUT
+              echo "Exportando APP_PRIVATE_KEY_BH_TERRAFORM_1"
+              echo "APP_PRIVATE_KEY_BH<<EOF" >> $GITHUB_OUTPUT
+              echo "${{ secrets.APP_PRIVATE_KEY_BH_TERRAFORM_1 }}" >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+            elif [[ $RESULT -eq 1 && '${{ vars.APPLICATION_ID_BH_TERRAFORM_2 }}' != '' ]]; then
+              echo "Exportando APPLICATION_ID_BH_TERRAFORM_2"
+              echo "APPLICATION_ID_BH=${{ vars.APPLICATION_ID_BH_TERRAFORM_2 }}" >> $GITHUB_OUTPUT
+              echo "Exportando APP_PRIVATE_KEY_BH_TERRAFORM_2"
+              echo "APP_PRIVATE_KEY_BH<<EOF" >> $GITHUB_OUTPUT
+              echo "${{ secrets.APP_PRIVATE_KEY_BH_TERRAFORM_2 }}" >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+            else
+              echo "Erro ao realizar a rotacao do token"
+              exit 1
+            fi
+          else
+            echo "APPLICATION_ID_BH=${{ secrets.APPLICATION_ID }}" >> $GITHUB_OUTPUT
+            echo "APP_PRIVATE_KEY_BH=${{ secrets.APP_PRIVATE_KEY }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get Token
+        id: get_workflow_token
+        uses: peter-murray/workflow-application-token-action@v2
+        with:
+          application_id: ${{ steps.evaluate_secrets.outputs.APPLICATION_ID_BH }}
+          application_private_key: ${{ steps.evaluate_secrets.outputs.APP_PRIVATE_KEY_BH }}
+
+      - name: Checkout GitHub Action Repo
+        uses: actions/checkout@v3
+        with:
+          repository: itau-corp/itau-up2-action-criamudancaservicenow
+          ref: 'refs/heads/release-1.2.5'
+          path: .github/actions/itau-up2-action-criamudancaservicenow
+          token: ${{ steps.get_workflow_token.outputs.token }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: workflows-itau
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker Image Pull
+        id: docker-image-pull
+        run: docker pull ghcr.io/itau-corp/itau-up2-action-criamudancaservicenow:1.2.5
+
+      - name: Cria Mudanca
+        uses: ./.github/actions/itau-up2-action-criamudancaservicenow
+        id: cria_gmud
+        env:
+          STS_CLIENT_ID: ${{ secrets.GOVCLOUDPUB_PROD_CLIENT_ID }}
+          STS_CLIENT_SECRET: ${{ secrets.GOVCLOUDPUB_PROD_SECRET_ID }}
+          SNOW_USER: ${{ secrets.GOVCLOUDPUB_PROD_SNOW }}
+        with:
+          operation: 'create'
+          item_de_configuracao: ${{ secrets.CONFIG_ITEM }}
+          racf: ${{ github.actor }}
+          pipeline_type: ${{ inputs.change-type }}
+          pull_request_body: ${{ github.event.pull_request.body }}
+          commit: ${{ github.event.pull_request.head.sha }}
+          commit_retorno: ${{ github.event.pull_request.base.sha }}
+      # Use the output from the `gmud` step
+      - name: ID da mudanca
+        run: |
+          echo "::notice::ID da mudanca: ${{ steps.cria_gmud.outputs.numero_mudanca }}"
+          echo "Id gerado ${{ steps.cria_gmud.outputs.numero_mudanca }}"
+          echo "Ambiente gerado ${{ steps.cria_gmud.outputs.ENVIRONMENT }}"
+
+      - name: Executed Job Flag
+        id: executed
+        run: |
+          executed=true
+          echo "flag=$executed" >> $GITHUB_OUTPUT
+
+  cria-agendamento:
+    runs-on: ${{ vars.RUNNER_K8S_SPOT_LOW }}
+    if: (inputs.environment == 'prod') || (inputs.environment == 'hotfix' )
+    environment: ${{ needs.cria-mudanca.outputs.agendamento }}
+    outputs:
+      success: ${{ steps.executed.outputs.flag }}
+      agendamento: ${{ steps.cria_gmud.outputs.ENVIRONMENT }}
+
+    needs:
+      - cria-mudanca
+    steps:
+      - name: Evaluate secrets
+        id: evaluate_secrets
+        run: |
+          if [[ '${{ secrets.APP_PRIVATE_KEY_BH_TERRAFORM_1 }}' != '' || '${{ secrets.APP_PRIVATE_KEY_BH_TERRAFORM_2 }}' != '' || '${{ secrets.APP_PRIVATE_KEY_BH_3 }}' != '' ]]; then
+            RESULT=$(( ($GITHUB_RUN_NUMBER % 2) ))
+            echo $RESULT
+            if [[ $RESULT -eq 0 && '${{ vars.APPLICATION_ID_BH_TERRAFORM_1 }}' != '' ]]; then
+              echo "Exportando APPLICATION_ID_BH_TERRAFORM_1"
+              echo "APPLICATION_ID_BH=${{ vars.APPLICATION_ID_BH_TERRAFORM_1 }}" >> $GITHUB_OUTPUT
+              echo "Exportando APP_PRIVATE_KEY_BH_TERRAFORM_1"
+              echo "APP_PRIVATE_KEY_BH<<EOF" >> $GITHUB_OUTPUT
+              echo "${{ secrets.APP_PRIVATE_KEY_BH_TERRAFORM_1 }}" >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+            elif [[ $RESULT -eq 1 && '${{ vars.APPLICATION_ID_BH_TERRAFORM_2 }}' != '' ]]; then
+              echo "Exportando APPLICATION_ID_BH_TERRAFORM_2"
+              echo "APPLICATION_ID_BH=${{ vars.APPLICATION_ID_BH_TERRAFORM_2 }}" >> $GITHUB_OUTPUT
+              echo "Exportando APP_PRIVATE_KEY_BH_TERRAFORM_2"
+              echo "APP_PRIVATE_KEY_BH<<EOF" >> $GITHUB_OUTPUT
+              echo "${{ secrets.APP_PRIVATE_KEY_BH_TERRAFORM_2 }}" >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+            else
+              echo "Erro ao realizar a rotacao do token"
+              exit 1
+            fi
+          else
+            echo "APPLICATION_ID_BH=${{ secrets.APPLICATION_ID }}" >> $GITHUB_OUTPUT
+            echo "APP_PRIVATE_KEY_BH=${{ secrets.APP_PRIVATE_KEY }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get Token
+        id: get_workflow_token
+        uses: peter-murray/workflow-application-token-action@v2
+        with:
+          application_id: ${{ steps.evaluate_secrets.outputs.APPLICATION_ID_BH }}
+          application_private_key: ${{ steps.evaluate_secrets.outputs.APP_PRIVATE_KEY_BH }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: workflows-itau
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker Image Pull
+        id: docker-image-pull
+        run: docker pull ghcr.io/itau-corp/itau-up2-action-criamudancaservicenow:1.2.5
+
+      - name: Checkout GitHub Action Repo
+        uses: actions/checkout@v3
+        with:
+          repository: itau-corp/itau-up2-action-criamudancaservicenow
+          ref: 'refs/heads/release-1.2.5'
+          path: .github/actions/itau-up2-action-criamudancaservicenow
+          token: ${{ steps.get_workflow_token.outputs.token }}
+
+      - name: Agenda deploy
+        uses: ./.github/actions/itau-up2-action-criamudancaservicenow
+        id: cria_gmud
+        env:
+          STS_CLIENT_ID: ${{ secrets.GOVCLOUDPUB_PROD_CLIENT_ID }}
+          STS_CLIENT_SECRET: ${{ secrets.GOVCLOUDPUB_PROD_SECRET_ID }}
+          SNOW_USER: ${{ secrets.GOVCLOUDPUB_PROD_SNOW }}
+        with:
+          operation: 'schedule'
+          item_de_configuracao: ${{ secrets.CONFIG_ITEM }}
+          racf: ${{ github.actor }}
+          pipeline_type: ${{ inputs.change-type }}
+          pull_request_body: ${{ github.event.pull_request.body }}
+          commit: ${{ github.event.pull_request.head.sha }}
+      - name: Executed Job Flag
+        id: executed
+        run: |
+          executed=true
+          echo "flag=$executed" >> $GITHUB_OUTPUT
+
+      # Use the output from the `gmud` step
+
+  finaliza-mudanca:
+    runs-on: ${{ vars.RUNNER_K8S_SPOT_LOW }}
+    if: ( inputs.environment == 'prod') || ( inputs.environment == 'hotfix' )
+    needs:
+      - terraform-cd
+    steps:
+      - name: Evaluate secrets
+        id: evaluate_secrets
+        run: |
+          if [[ '${{ secrets.APP_PRIVATE_KEY_BH_TERRAFORM_1 }}' != '' || '${{ secrets.APP_PRIVATE_KEY_BH_TERRAFORM_2 }}' != '' || '${{ secrets.APP_PRIVATE_KEY_BH_3 }}' != '' ]]; then
+            RESULT=$(( ($GITHUB_RUN_NUMBER % 2) ))
+            echo $RESULT
+            if [[ $RESULT -eq 0 && '${{ vars.APPLICATION_ID_BH_TERRAFORM_1 }}' != '' ]]; then
+              echo "Exportando APPLICATION_ID_BH_TERRAFORM_1"
+              echo "APPLICATION_ID_BH=${{ vars.APPLICATION_ID_BH_TERRAFORM_1 }}" >> $GITHUB_OUTPUT
+              echo "Exportando APP_PRIVATE_KEY_BH_TERRAFORM_1"
+              echo "APP_PRIVATE_KEY_BH<<EOF" >> $GITHUB_OUTPUT
+              echo "${{ secrets.APP_PRIVATE_KEY_BH_TERRAFORM_1 }}" >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+            elif [[ $RESULT -eq 1 && '${{ vars.APPLICATION_ID_BH_TERRAFORM_2 }}' != '' ]]; then
+              echo "Exportando APPLICATION_ID_BH_TERRAFORM_2"
+              echo "APPLICATION_ID_BH=${{ vars.APPLICATION_ID_BH_TERRAFORM_2 }}" >> $GITHUB_OUTPUT
+              echo "Exportando APP_PRIVATE_KEY_BH_TERRAFORM_2"
+              echo "APP_PRIVATE_KEY_BH<<EOF" >> $GITHUB_OUTPUT
+              echo "${{ secrets.APP_PRIVATE_KEY_BH_TERRAFORM_2 }}" >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+            else
+              echo "Erro ao realizar a rotacao do token"
+              exit 1
+            fi
+          else
+            echo "APPLICATION_ID_BH=${{ secrets.APPLICATION_ID }}" >> $GITHUB_OUTPUT
+            echo "APP_PRIVATE_KEY_BH=${{ secrets.APP_PRIVATE_KEY }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get Token
+        id: get_workflow_token
+        uses: peter-murray/workflow-application-token-action@v2
+        with:
+          application_id: ${{ steps.evaluate_secrets.outputs.APPLICATION_ID_BH }}
+          application_private_key: ${{ steps.evaluate_secrets.outputs.APP_PRIVATE_KEY_BH }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: workflows-itau
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker Image Pull
+        id: docker-image-pull
+        run: docker pull ghcr.io/itau-corp/itau-up2-action-criamudancaservicenow:1.2.5
+
+      - name: Checkout GitHub Action Repo
+        uses: actions/checkout@v3
+        with:
+          repository: itau-corp/itau-up2-action-criamudancaservicenow
+          ref: 'refs/heads/release-1.2.5'
+          path: .github/actions/itau-up2-action-criamudancaservicenow
+          token: ${{ steps.get_workflow_token.outputs.token }}
+
+      - name: Fecha Mudanca
+        uses: ./.github/actions/itau-up2-action-criamudancaservicenow
+        id: cria_gmud
+        env:
+          STS_CLIENT_ID: ${{ secrets.GOVCLOUDPUB_PROD_CLIENT_ID }}
+          STS_CLIENT_SECRET: ${{ secrets.GOVCLOUDPUB_PROD_SECRET_ID }}
+          SNOW_USER: ${{ secrets.GOVCLOUDPUB_PROD_SNOW }}
+        with:
+          operation: 'close'
+          item_de_configuracao: ${{ secrets.CONFIG_ITEM }}
+          racf: ${{ github.actor }}
+          pipeline_type: 'application'
+          pull_request_body: ${{ github.event.pull_request.body }}
+          commit: ${{ github.event.pull_request.head.sha }}
+
+  # EOF: Itau's Change management process
+
+  terraform-cd:
+    name: 'Terraform CD'
+    runs-on: ${{ inputs.runs-on }}
+    environment: ${{ inputs.environment }}
+    if: ( !cancelled() ) && ( inputs.environment != 'prod' || needs.cria-agendamento.outputs.success )
+    needs:
+      - config-parse
+      - cria-agendamento
+    defaults:
+      run:
+        working-directory: ${{ needs.config-parse.outputs.infra-working-directory }}
+    # env:
+    #   #this is needed since we are running terraform with read-only permissions
+    #   ARM_SKIP_PROVIDER_REGISTRATION: true
+    outputs:
+      tfplanExitCode: ${{ steps.tf-plan.outputs.exitcode }}
+      tfplan: ${{ steps.tf-plan.outputs.summary }}
+
+    steps:
+    - name: Get Token
+      id: get_workflow_token
+      uses: peter-murray/workflow-application-token-action@v1
+      with:
+        application_id: ${{ secrets.APPLICATION_ID }}
+        application_private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
+    # Checkout the repository to the GitHub Actions runner
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Set Azure Environment variables
+      id: set-azure-env
+      shell: bash
+      run: |
+        if [[ "${{ inputs.environment }}" == "dev" ]]; then
+          ARM_CLIENT_ID="${{ secrets.AZURE_CLIENT_ID_DEV }}"
+          ARM_SUBSCRIPTION_ID="${{ secrets.AZURE_SUBSCRIPTION_ID_DEV }}"
+        elif [[ "${{ inputs.environment }}" == "prod" ]]; then
+          ARM_CLIENT_ID="${{ secrets.AZURE_CLIENT_ID_PROD }}"
+          ARM_SUBSCRIPTION_ID="${{ secrets.AZURE_SUBSCRIPTION_ID_PROD }}"
+        else
+          echo "Unable to detect environment"
+          exit 1
+        fi
+
+        echo "Ambiente: ${{ inputs.environment }}"
+        echo "Exportando ARM_CLIENT_ID e ARM_SUBSCRIPTION_ID"
+        echo "ARM_CLIENT_ID=$ARM_CLIENT_ID" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=$ARM_SUBSCRIPTION_ID" >> $GITHUB_ENV
+        echo "ARM_CLIENT_ID=$ARM_CLIENT_ID" >> $GITHUB_OUTPUT
+        echo "ARM_SUBSCRIPTION_ID=$ARM_SUBSCRIPTION_ID" >> $GITHUB_OUTPUT
+
+    - name: 'az login with oidc'
+      uses: azure/login@v1
+      with:
+        # allow-no-subscriptions: true
+        client-id: ${{ steps.set-azure-env.outputs.ARM_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ steps.set-azure-env.outputs.ARM_SUBSCRIPTION_ID }}
+
+    # Install the latest version of the Terraform CLI
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_wrapper: false
+        terraform_version: ${{ needs.config-parse.outputs.infra-terraform-version }}
+
+    - name: Setup Terragrunt
+      run: |
+        sudo wget -q -O /bin/terragrunt "https://github.com/gruntwork-io/terragrunt/releases/download/${{ needs.config-parse.outputs.infra-terragrunt-version }}/terragrunt_linux_amd64"
+        sudo chmod +x /bin/terragrunt
+        terragrunt --version
+        terraform --version
+
+    - name: 'Init Terraform Backend'
+      id: init-terraform-backend
+      shell: bash
+      run: |
+        pushd ../scripts
+          # Get Repository ID
+          export REPO_ID=$(curl -s -H "Authorization:token ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }} | jq '.id')
+          export ENV_NAME=${{ inputs.environment }}
+
+          # Create tf backend if not exists
+          ./create-tf-backend-azure.sh
+        popd
+
+    # # Generate backend.tf file
+    # - name: Generate TF Backend configs
+    #   shell: bash
+    #   run: |
+    #     cat > backend.tf <<EOF
+    #     terraform {
+    #       backend "azurerm" {
+    #         resource_group_name  = "${{ steps.init-terraform-backend.outputs.RESOURCE_GROUP_NAME }}"
+    #         storage_account_name = "${{ steps.init-terraform-backend.outputs.STORAGE_ACCOUNT_NAME }}"
+    #         container_name       = "${{ steps.init-terraform-backend.outputs.CONTAINER_NAME }}"
+    #         key                  = "terraform.tfstate"
+    #       }
+    #     }
+    #     EOF
+
+    # - name: Terraform Format
+    #   id: fmt
+    #   run: terraform fmt -check
+
+    # - name: Terraform Init
+    #   id: init
+    #   run: terraform init
+
+    - name: Terragrunt Validate
+      id: validate
+      run: |
+        terragrunt run-all validate \
+         --terragrunt-working-dir $PWD/env/${{ inputs.environment }}/ \
+         --terragrunt-include-external-dependencies \
+         --terragrunt-non-interactive
+
+    - name: Terragrunt Plan
+      id: tf-plan
+      run: |
+        export exitcode=0
+        terragrunt run-all plan \
+        --terragrunt-working-dir $PWD/env/${{ inputs.environment }} \
+        -no-color \
+        -out tfplan || export exitcode=$?
+        echo "exitcode=$exitcode" >> $GITHUB_OUTPUT
+
+        # find ./env -type f
+        # bk=$(find ./env -type f -name '*backend.tf')
+        # fl=$(find ./env -type f -name '*flakes.txt')
+        # cat $bk
+        # cat $fl
+        
+        if [ $exitcode -eq 1 ]; then
+          echo Terragrunt Plan Failed!
+          exit 1
+        else 
+          exit 0
+        fi
+
+    - name: Terraform Show
+      id: show
+      shell: bash
+      run: |
+        terragrunt run-all show -no-color tfplan \
+        --terragrunt-working-dir $PWD/env/${{ inputs.environment }} \
+        --terragrunt-include-external-dependencies \
+        --terragrunt-non-interactive 2>&1 > /tmp/plan.txt
+    
+    - uses: actions/github-script@v6
+      if: github.event_name == 'pull_request'
+      with:
+        github-token: ${{ steps.get_workflow_token.outputs.token }}
+        script: |
+          const fs = require("fs");
+          const plan = fs.readFileSync("/tmp/plan.txt", "utf8");
+          const maxGitHubBodyCharacters = 65536;
+          
+          function chunkSubstr(str, size) {
+            const numChunks = Math.ceil(str.length / size)
+            const chunks = new Array(numChunks)
+            for (let i = 0, o = 0; i < numChunks; ++i, o += size) {
+              chunks[i] = str.substr(o, size)
+            }
+            return chunks
+          }
+        
+          // Split the Terraform plan into chunks if it's too big and can't fit into the GitHub Action
+          var plans = chunkSubstr(plan, maxGitHubBodyCharacters); 
+          for (let i = 0; i < plans.length; i++) {
+            const output = `### Terraform Plan Output - Part # ${i + 1}
+          #### Terraform validate 🖌\`${{ steps.validate.outcome }}\`
+ 
+          <details><summary>Show Plan</summary>
+
+          \`\`\`terraform\n
+          ${plans[i]}
+          \`\`\`
+            
+          </details>
+            
+          *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working Directory: \`${{ needs.config-parse.outputs.infra-working-directory }}\`, Workflow: \`${{ github.workflow }}\`*`;   
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+          }
+
+    - name: Terraform Apply
+      if: github.event_name == 'push' && inputs.environment != 'prod'
+      run: |
+        echo "Running on non-production environment"
+        terragrunt run-all apply tfplan \
+        --terragrunt-working-dir $PWD/env/${{ inputs.environment }} \
+        --terragrunt-include-external-dependencies \
+        --terragrunt-non-interactive
+      shell: bash
+
+    - name: Terraform Apply Gmud
+      if: inputs.environment == 'prod' && needs.cria-agendamento.outputs.success
+      run: |
+        echo "Running on production environment"
+        terragrunt run-all apply tfplan \
+        --terragrunt-working-dir $PWD/env/${{ inputs.environment }} \
+        --terragrunt-include-external-dependencies \
+        --terragrunt-non-interactive
+      shell: bash

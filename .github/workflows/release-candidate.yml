@@ -1,0 +1,24 @@
+name: Foundation Subscription Release Candidate branch workflow
+
+on:
+  push:
+    branches:
+      - 'release**'
+
+jobs:
+
+  terraform-ci:
+    uses: ./.github/workflows/ci.yml
+    with:
+      environment: prod
+      iupipes-config-path: '.iupipes.yml'
+    secrets: inherit
+
+  open-pr-to-main:
+    needs:
+      - terraform-ci
+    uses: itau-corp/itau-up2-reusable-workflows-common-pull-request/.github/workflows/create.yml@v2
+    with:
+      target-branch: main
+      origin-branch: ${{ github.ref_name }}
+    secrets: inherit

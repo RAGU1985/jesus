@@ -1,0 +1,28 @@
+name: Foundation Subscription feature branch workflow
+
+on:
+  push:
+    branches:
+      - 'feature**'
+
+jobs:
+
+  terraform-ci:
+    # uses: itau-corp/itau-jb7-infra-foundation-azure/.github/workflows/ci.yml@develop
+    uses: ./.github/workflows/ci.yml
+    with:
+      environment: dev
+      iupipes-config-path: '.iupipes.yml'
+    secrets: inherit
+
+  open-pr-to-develop:
+    needs:
+      - terraform-ci
+    uses: itau-corp/itau-up2-reusable-workflows-common-pull-request/.github/workflows/create.yml@v2
+    with:
+      target-branch: 'develop'
+      custom-body: '
+        Pull Request Opened automatically.<breakLine>
+        In order to start the deployment process it is necessary to perform a Code-Review.<breakLine>
+        At least 1 approval (Foundation) is necessary to allow the IaC Deployment.<breakLine>'
+    secrets: inherit

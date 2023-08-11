@@ -1,0 +1,7 @@
+# Global Approvers
+*               @itau-corp/jb7-mantainer
+
+# Approvers for specific Files or Directories (Add approvers for any specific files/folders here with path, example below)
+# /.github/      @itau-corp/jb7-mantainer
+# /infra/lib/    @itau-corp/ey4-mantainer
+# /infra/main.tf @itau-corp/ey4-mantainer @itau-corp/jb7-mantainer

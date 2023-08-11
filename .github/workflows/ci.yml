@@ -1,0 +1,229 @@
+name: 'Azure Foundation CI Workflow'
+
+permissions:
+  id-token: write
+  contents: write
+  issues: write
+  pull-requests: write
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        required: false
+        type: string
+        default: github-ubuntu-2cores
+      iupipes-config-path:
+        required: false
+        type: string
+        default: '.iupipes.yml'
+      infra-working-directory:
+        required: false
+        type: string
+        default: 'infra'
+      infra-terraform-version:
+        required: false
+        type: string
+        default: '1.1.9'
+      environment:
+        required: true
+        type: string
+
+    secrets:
+      AZURE_CLIENT_ID_DEV:
+        required: true
+      AZURE_SUBSCRIPTION_ID_DEV:
+        required: true
+      AZURE_CLIENT_ID_PROD:
+        required: true
+      AZURE_SUBSCRIPTION_ID_PROD:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+
+env:
+  #ARM_CLIENT_ID: "${{ secrets.AZURE_CLIENT_ID }}"
+  #ARM_SUBSCRIPTION_ID: "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+  ARM_TENANT_ID: "${{ secrets.AZURE_TENANT_ID }}"
+  ARM_USE_OIDC: true
+
+jobs:
+
+  config-parse:
+    name: Parser config file
+    runs-on: ${{ inputs.runs-on }}
+    outputs:
+      infra-working-directory: ${{ steps.action-parse.outputs.infra-working-directory }}
+      infra-terraform-version: ${{ steps.action-parse.outputs.infra-terraform-version }}
+      infra-terragrunt-version: ${{ steps.action-parse.outputs.infra-terragrunt-version }}
+    steps:
+      - name: Get Token
+        id: get_workflow_token
+        uses: peter-murray/workflow-application-token-action@v1
+        with:
+          application_id: ${{ secrets.APPLICATION_ID }}
+          application_private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Checkout GitHub Action
+        uses: actions/checkout@v2
+        with:
+          repository: itau-corp/itau-up2-action-config-parse
+          ref: 'refs/heads/v1'
+          path: .github/actions/itau-up2-action-config-parse
+          token: ${{ steps.get_workflow_token.outputs.token }}
+
+      - name: Config parser
+        id: action-parse
+        uses: ./.github/actions/itau-up2-action-config-parse
+        with:
+          configPath: ${{ inputs.iupipes-config-path }}
+          reusableInputs: '${{ toJSON(inputs) }}'
+
+  terraform-ci:
+    name: 'Terraform CI'
+    runs-on: ${{ inputs.runs-on }}
+    environment: ${{ inputs.environment }}
+    needs:
+      - config-parse
+    defaults:
+      run:
+        working-directory: ${{ needs.config-parse.outputs.infra-working-directory }}
+    # env:
+    #   #this is needed since we are running terraform with read-only permissions
+    #   ARM_SKIP_PROVIDER_REGISTRATION: true
+    outputs:
+      tfplanExitCode: ${{ steps.tf-plan.outputs.exitcode }}
+      tfplan: ${{ steps.tf-plan.outputs.summary }}
+
+    steps:
+    # Checkout the repository to the GitHub Actions runner
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Set Azure Environment variables
+      id: set-azure-env
+      shell: bash
+      run: |
+        if [[ "${{ inputs.environment }}" == "dev" ]]; then
+          ARM_CLIENT_ID="${{ secrets.AZURE_CLIENT_ID_DEV }}"
+          ARM_SUBSCRIPTION_ID="${{ secrets.AZURE_SUBSCRIPTION_ID_DEV }}"
+        elif [[ "${{ inputs.environment }}" == "prod" ]]; then
+          ARM_CLIENT_ID="${{ secrets.AZURE_CLIENT_ID_PROD }}"
+          ARM_SUBSCRIPTION_ID="${{ secrets.AZURE_SUBSCRIPTION_ID_PROD }}"
+        else
+          echo "Unable to detect environment"
+          exit 1
+        fi
+
+        echo "Ambiente: ${{ inputs.environment }}"
+        echo "Exportando ARM_CLIENT_ID e ARM_SUBSCRIPTION_ID"
+        echo "ARM_CLIENT_ID=$ARM_CLIENT_ID" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=$ARM_SUBSCRIPTION_ID" >> $GITHUB_ENV
+        echo "ARM_CLIENT_ID=$ARM_CLIENT_ID" >> $GITHUB_OUTPUT
+        echo "ARM_SUBSCRIPTION_ID=$ARM_SUBSCRIPTION_ID" >> $GITHUB_OUTPUT
+
+    - name: 'az login with oidc'
+      uses: azure/login@v1
+      with:
+        # allow-no-subscriptions: true
+        client-id: ${{ steps.set-azure-env.outputs.ARM_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ steps.set-azure-env.outputs.ARM_SUBSCRIPTION_ID }}
+
+    # Install the latest version of the Terraform CLI
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_wrapper: false
+        terraform_version: ${{ needs.config-parse.outputs.infra-terraform-version }}
+
+    - name: Setup Terragrunt
+      run: |
+        sudo wget -q -O /bin/terragrunt "https://github.com/gruntwork-io/terragrunt/releases/download/${{ needs.config-parse.outputs.infra-terragrunt-version }}/terragrunt_linux_amd64"
+        sudo chmod +x /bin/terragrunt
+        terragrunt --version
+        terraform --version
+
+    # - name: Terraform Format
+    #   run: |
+    #     pushd modules
+    #       for d in $(ls); do
+    #         if [[ -d $d ]]; then
+    #           pushd "$d"
+    #             echo "Running terraform fmt -check in ${d}"
+    #             terragrunt hclfmt -check
+    #           popd
+    #         fi
+    #       done
+    #     popd
+
+    - name: 'Init Terraform Backend'
+      id: init-terraform-backend
+      shell: bash
+      run: |
+        pushd ../scripts
+          # Get Repository ID
+          export REPO_ID=$(curl -s -H "Authorization:token ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }} | jq '.id')
+          export ENV_NAME=${{ inputs.environment }}
+
+          # Create tf backend if not exists
+          ./create-tf-backend-azure.sh
+        popd
+
+    # # Generate backend.tf file
+    # - name: Generate TF Backend configs
+    #   shell: bash
+    #   run: |
+    #     cat > backend.tf <<EOF
+    #       terraform {
+    #         backend "azurerm" {
+    #           resource_group_name  = "${{ steps.init-terraform-backend.outputs.RESOURCE_GROUP_NAME }}"
+    #           storage_account_name = "${{ steps.init-terraform-backend.outputs.STORAGE_ACCOUNT_NAME }}"
+    #           container_name       = "${{ steps.init-terraform-backend.outputs.CONTAINER_NAME }}"
+    #           key                  = "terraform.tfstate"
+    #         }
+    #       }
+    #     EOF
+
+    - name: Terragrunt Validate
+      run: |
+        terragrunt run-all validate \
+         --terragrunt-working-dir $PWD/env/${{ inputs.environment }}/ \
+         --terragrunt-include-external-dependencies \
+         --terragrunt-non-interactive
+
+    - name: Terragrunt Plan
+      id: tf-plan
+      run: |
+        export exitcode=0
+        terragrunt run-all plan \
+        --terragrunt-working-dir $PWD/env/${{ inputs.environment }} \
+        -no-color \
+        -out tfplan || export exitcode=$?
+        echo "exitcode=$exitcode" >> $GITHUB_OUTPUT
+
+        # find ./env -type f
+        # bk=$(find ./env -type f -name '*backend.tf')
+        # fl=$(find ./env -type f -name '*flakes.txt')
+        # cat $bk
+        # cat $fl
+        
+        if [ $exitcode -eq 1 ]; then
+          echo Terragrunt Plan Failed!
+          exit 1
+        else 
+          exit 0
+        fi
+
+    - name: Publish Terraform Plan
+      uses: actions/upload-artifact@v3
+      with:
+        name: tfplan
+        path: tfplan
+
+  # TO-DO:
+  # terrascan policy-as-code

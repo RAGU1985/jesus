@@ -1,0 +1,13 @@
+name: Foundation Subscription Release Candidate PR Closed
+
+on:
+  pull_request:
+    types: closed
+    branches: 'release/**'
+
+jobs:
+  pre-release:
+    uses: itau-corp/itau-up2-reusable-workflows-common-auto-tag/.github/workflows/create.yml@v1
+    with:
+      prerelease: true
+    secrets: inherit
