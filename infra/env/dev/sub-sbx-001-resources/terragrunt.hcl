@@ -9,7 +9,6 @@ locals {
   location = local.env_vars.locals.location
   env      = local.env_vars.locals.env_name
   mghead   = local.env_vars.locals.mghead
-  provider_version = "3.52.0"
   net_rg_name = "rg-net-${local.mghead}-sbx-${local.location}-001"
   tags = {
     ApplicationName       = "Compass Data"                               #mandatory
