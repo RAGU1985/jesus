@@ -15,7 +15,7 @@ output "subnet_ids" {
 
 }
 output "vnet_ids" {
-  value       = [for x in data.azurerm_virtual_network.vnet : x.id]
+  value       = "/subscriptions/d7caf0f4-7c69-4c4a-af92-3b52493f74ca/resourceGroups/rg-aks-brazilsouth-dev-001/providers/Microsoft.Network/virtualNetworks/vnet-itaudev-sbx-test-networking-001"
   description = "IDs of the subnets."
 
 }
