@@ -1,8 +1,3 @@
-variable "subscription_id" {
-  type        = string
-  description = "Subscription id to echo"
-}
-
 variable "environment" {
   type        = string
   description = "environment type"
@@ -22,31 +17,6 @@ variable "net_rg_name" {
   description = "name of the resource"
 }
 
-variable "shared_rg_name" {
-  type        = string
-  description = "name of the resource"
-}
-
-variable "private_dns_zone_name" {
-  type        = string
-  description = "name of the private dns zone resource"
-}
-
-variable "private_dns_resolver_name" {
-  type        = string
-  description = "name of the private dns resolver resource"
-}
-
-variable "virtual_network_id_for_dns" {
-  type        = string
-  description = "if of the virtual network that should be used for the private dns resource"
-}
-
-variable "private_dns_virtual_link_name" {
-  type        = string
-  description = "name of the private dns resolver outbound endpoint resource"
-}
-
 variable "tags" {
   type        = map(string)
   description = "Additional Network resources tags, in addition to the resource group tags."
@@ -56,7 +26,6 @@ variable "tags" {
 variable "virtual_networks" {
   type = map(object({
     name          = string
-    rg_name       = string
     address_space = list(string)
   }))
   description = "name of the resource"
@@ -66,7 +35,6 @@ variable "subnets" {
   description = "The virtal networks subnets with their properties."
   type = map(object({
     name              = string
-    rg_name           = string
     vnet_key          = string
     vnet_name         = string
     address_prefixes  = list(string)
