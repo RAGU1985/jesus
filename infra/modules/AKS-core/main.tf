@@ -41,7 +41,7 @@ module "managed_identity" {
     azurerm              = azurerm
     azurerm.sub_provider = azurerm.sub_provider
     }
-    vnet_id = module.subnet.vnet_ids[0]
+    vnet_id = module.subnet.vnet_ids
     dns_id = module.aks1.id[0]
     managed_identity_id =  module.managed_identity.principal_id[0]
   }
