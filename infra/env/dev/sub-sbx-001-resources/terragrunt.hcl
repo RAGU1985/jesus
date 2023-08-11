@@ -135,7 +135,7 @@ generate "provider" {
   if_exists = "overwrite_terragrunt"
   contents = <<EOF
 provider "azurerm" {
-  version = "3.52.0"
+  alias   = "sub_provider"
   features {}
   skip_provider_registration = true
 }
