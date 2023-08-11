@@ -1,7 +1,6 @@
 data "azurerm_virtual_network" "vnet" {
-  for_each = var.virtual_networks
-  name     = each.value["name"]
-  resource_group_name = each.value["resource_group_name"]
+  name     = "vnet-itaudev-sbx-test-networking-001"
+  resource_group_name = rg-aks-brazilsouth-dev-001
 }
 
 resource "azurerm_subnet" "snet" {
