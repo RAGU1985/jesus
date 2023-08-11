@@ -1,6 +1,6 @@
 data "azurerm_virtual_network" "vnet" {
   name     = "vnet-itaudev-sbx-test-networking-001"
-  resource_group_name = rg-aks-brazilsouth-dev-001
+  resource_group_name = "rg-aks-brazilsouth-dev-001"
 }
 
 resource "azurerm_subnet" "snet" {
