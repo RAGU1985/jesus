@@ -156,7 +156,7 @@ terraform {
 }
 
 inputs = {
-    subscription_id                         = dependency.subscription.outputs.subscription_id
+    subscription_id                         = "d7caf0f4-7c69-4c4a-af92-3b52493f74ca"
     resource_groups                         = local.resource_groups
     virtual_networks                        = local.virtual_networks
     subnets                                 = local.subnets
